@@ -13,6 +13,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.run_id }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   validate:
     name: ${{ matrix.name }}
@@ -24,11 +28,13 @@ jobs:
           - name: Windows BAAS App CUDA OFF
             runner: windows-latest
             platform: windows
+            conan_cache_key: Conan2-BAAS-CUDA_off-Windows-x64
             conan_output: windows-msvc-release-baas
             host_profile: windows-msvc-release
             preset: conan-windows-msvc-release-baas
-            extra_conan_args: >-
-              -o onnxruntime_use_cuda=False
+            extra_conan_args: |
+              -o
+              &:onnxruntime_use_cuda=False
             test_command: ""
             release_product: BAAS
             release_platform: windows
@@ -37,11 +43,13 @@ jobs:
           - name: Windows BAAS App CUDA ON
             runner: windows-latest
             platform: windows-cuda
+            conan_cache_key: Conan2-BAAS-CUDA_on-Windows-x64
             conan_output: windows-msvc-release-baas-cuda
             host_profile: windows-msvc-release
             preset: conan-windows-msvc-release-baas-cuda
-            extra_conan_args: >-
-              -o onnxruntime_use_cuda=True
+            extra_conan_args: |
+              -o
+              &:onnxruntime_use_cuda=True
             test_command: ""
             release_product: BAAS
             release_platform: windows
@@ -50,13 +58,17 @@ jobs:
           - name: Windows OCR
             runner: windows-latest
             platform: windows
+            conan_cache_key: Conan2-BAAS_ocr-Windows-x64
             conan_output: windows-msvc-release-ocr
             host_profile: windows-msvc-release
             preset: conan-windows-msvc-release-ocr
-            extra_conan_args: >-
-              -o onnxruntime_use_cuda=False
-              -o use_ffmpeg=False
-              -o use_benchmark=False
+            extra_conan_args: |
+              -o
+              &:onnxruntime_use_cuda=False
+              -o
+              &:use_ffmpeg=False
+              -o
+              &:use_benchmark=False
             test_command: >-
               python -m unittest discover -s apps/ocr_server/test -p "*.py" &&
               python -c "import shutil; shutil.rmtree('build/bin/output', ignore_errors=True); shutil.rmtree('build/bin/config', ignore_errors=True)"
@@ -67,13 +79,17 @@ jobs:
           - name: Linux OCR
             runner: ubuntu-22.04
             platform: linux
+            conan_cache_key: Conan2-BAAS_ocr-Linux-x64
             conan_output: linux-gcc-release-ocr
             host_profile: linux-gcc-release
             preset: conan-linux-gcc-release-ocr
-            extra_conan_args: >-
-              -o onnxruntime_use_cuda=False
-              -o use_ffmpeg=False
-              -o use_benchmark=False
+            extra_conan_args: |
+              -o
+              &:onnxruntime_use_cuda=False
+              -o
+              &:use_ffmpeg=False
+              -o
+              &:use_benchmark=False
             test_command: >-
               python -m unittest discover -s apps/ocr_server/test -p "*.py" &&
               python -c "import shutil; shutil.rmtree('build/bin/output', ignore_errors=True); shutil.rmtree('build/bin/config', ignore_errors=True)"
@@ -84,13 +100,17 @@ jobs:
           - name: macOS OCR
             runner: macos-latest
             platform: macos
+            conan_cache_key: Conan2-BAAS_ocr-macOS-arm64
             conan_output: macos-appleclang-release-ocr
             host_profile: macos-appleclang-release
             preset: conan-macos-appleclang-release-ocr
-            extra_conan_args: >-
-              -o onnxruntime_use_cuda=False
-              -o use_ffmpeg=False
-              -o use_benchmark=False
+            extra_conan_args: |
+              -o
+              &:onnxruntime_use_cuda=False
+              -o
+              &:use_ffmpeg=False
+              -o
+              &:use_benchmark=False
             test_command: >-
               python -m unittest discover -s apps/ocr_server/test -p "*.py" &&
               python -c "import shutil; shutil.rmtree('build/bin/output', ignore_errors=True); shutil.rmtree('build/bin/config', ignore_errors=True)"
@@ -101,14 +121,19 @@ jobs:
           - name: Android OCR arm64-v8a
             runner: windows-latest
             platform: android
+            conan_cache_key: Conan2-BAAS_ocr-Android-arm64-v8a
             conan_output: android-clang-release-ocr-arm64-v8a
             host_profile: android-clang-arm64-v8a-release
             preset: conan-android-clang-release-ocr-arm64-v8a
-            extra_conan_args: >-
-              -c:h tools.android:ndk_path="$ANDROID_NDK_LATEST_HOME"
-              -o onnxruntime_use_cuda=False
-              -o use_ffmpeg=False
-              -o use_benchmark=False
+            extra_conan_args: |
+              -c:h
+              tools.android:ndk_path=${ANDROID_NDK_LATEST_HOME}
+              -o
+              &:onnxruntime_use_cuda=False
+              -o
+              &:use_ffmpeg=False
+              -o
+              &:use_benchmark=False
             test_command: ""
             release_product: BAAS_ocr
             release_platform: android
@@ -117,14 +142,19 @@ jobs:
           - name: Android OCR x86_64
             runner: windows-latest
             platform: android
+            conan_cache_key: Conan2-BAAS_ocr-Android-x86_64
             conan_output: android-clang-release-ocr-x86_64
             host_profile: android-clang-x86_64-release
             preset: conan-android-clang-release-ocr-x86_64
-            extra_conan_args: >-
-              -c:h tools.android:ndk_path="$ANDROID_NDK_LATEST_HOME"
-              -o onnxruntime_use_cuda=False
-              -o use_ffmpeg=False
-              -o use_benchmark=False
+            extra_conan_args: |
+              -c:h
+              tools.android:ndk_path=${ANDROID_NDK_LATEST_HOME}
+              -o
+              &:onnxruntime_use_cuda=False
+              -o
+              &:use_ffmpeg=False
+              -o
+              &:use_benchmark=False
             test_command: ""
             release_product: BAAS_ocr
             release_platform: android
@@ -148,7 +178,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.11"
           cache: pip
 
       - name: Install Ninja on Windows
@@ -193,6 +223,14 @@ jobs:
           test -d "$ANDROID_NDK_LATEST_HOME"
           echo "ANDROID_NDK_LATEST_HOME=$ANDROID_NDK_LATEST_HOME"
 
+      - name: Install OCR test dependencies
+        if: ${{ matrix.test_command != '' }}
+        shell: bash
+        working-directory: baas_cpp
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r apps/ocr_server/test/requirements.txt
+
       - name: Build with Conan
         uses: ./harness/.github/actions/baas-conan-build
         with:
@@ -201,6 +239,9 @@ jobs:
           host-profile: ${{ matrix.host_profile }}
           preset: ${{ matrix.preset }}
           extra-conan-args: ${{ matrix.extra_conan_args }}
+          conan-cache-key: ${{ matrix.conan_cache_key }}
+          conan-home: ${{ github.workspace }}/.conan2
+          save-cache: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/baas-cpp-validation-harness' }}
           test-command: ${{ matrix.test_command }}
 
       - name: Dry run release asset name
@@ -209,9 +250,9 @@ jobs:
         working-directory: baas_cpp
         run: |
           if [[ "${{ matrix.release_product }}" == "BAAS" ]]; then
-            version_file="build/BAAS_APP_version.txt"
+            version_file="build/${{ matrix.preset }}/BAAS_APP_version.txt"
           else
-            version_file="build/BAAS_OCR_version.txt"
+            version_file="build/${{ matrix.preset }}/BAAS_OCR_version.txt"
           fi
 
           version="$(tr -d '\r\n' < "${version_file}")"

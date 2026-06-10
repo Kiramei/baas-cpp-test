@@ -16,9 +16,20 @@ inputs:
     description: CMake configure and build preset name.
     required: true
   extra-conan-args:
-    description: Additional arguments passed to conan install.
+    description: Additional arguments passed to conan install, one argument per line.
     required: false
     default: ""
+  conan-cache-key:
+    description: GitHub Actions cache key for the Conan home.
+    required: true
+  conan-home:
+    description: Conan home directory to restore and save.
+    required: false
+    default: ${{ github.workspace }}/.conan2
+  save-cache:
+    description: Whether this run is allowed to replace the cache key when Conan packages changed.
+    required: false
+    default: "false"
   build:
     description: Whether to run cmake --build after configure.
     required: false
@@ -38,52 +49,170 @@ runs:
         python -m pip install "conan>=2,<3" PyYAML
 
     - name: Restore Conan cache
-      uses: actions/cache@v4
+      id: restore-cache
+      uses: actions/cache/restore@v5
       with:
-        path: ~/.conan2
-        key: >-
-          baas-conan-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-profile }}-${{ inputs.conan-output }}-${{ hashFiles(format('{0}/deploy/conan/conanfile.py', inputs.source-dir), format('{0}/deploy/conan/profiles/**', inputs.source-dir), format('{0}/deploy/conan/recipes/**', inputs.source-dir), format('{0}/CMakePresets.json', inputs.source-dir)) }}
-        restore-keys: |
-          baas-conan-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-profile }}-${{ inputs.conan-output }}-
-          baas-conan-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-profile }}-
+        path: ${{ inputs.conan-home }}
+        key: ${{ inputs.conan-cache-key }}
 
-    - name: Detect Conan build profile
+    - name: List restored Conan package sizes
       shell: bash
-      run: conan profile detect --force
+      working-directory: ${{ inputs.source-dir }}
+      env:
+        CONAN_HOME: ${{ inputs.conan-home }}
+      run: |
+        refs="$(conan list "*:*" -f compact | sed -E 's/^[[:space:]]+//' | grep -E '^[^[:space:]]+/[^[:space:]]+#[^[:space:]]+:[^[:space:]]+$' | sort -u || true)"
+        [[ -n "$refs" ]] || { echo "No Conan binary packages found in restored cache."; exit 0; }
+
+        printf '%-12s %s\n' "SIZE" "PACKAGE"
+        while IFS= read -r ref; do
+          path="$(conan cache path "$ref" 2>/dev/null || true)"
+          [[ -n "$path" && -e "$path" ]] && size="$(du -sh "$path" 2>/dev/null | awk '{print $1}')" || size="unknown"
+          printf '%-12s %s\n' "${size:-unknown}" "$ref"
+        done <<< "$refs"
 
     - name: Export private recipes
       shell: bash
       working-directory: ${{ inputs.source-dir }}
+      env:
+        CONAN_HOME: ${{ inputs.conan-home }}
       run: python deploy/conan/scripts/manage_recipes.py export
 
-    - name: Install Conan dependencies
+    - name: Snapshot Conan cache before install
       shell: bash
       working-directory: ${{ inputs.source-dir }}
+      env:
+        CONAN_HOME: ${{ inputs.conan-home }}
+      run: conan list "*:*" -f json --out-file "$RUNNER_TEMP/conan-packages-before.json"
+
+    - name: Install Conan dependencies
+      id: conan-install
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      env:
+        CONAN_HOME: ${{ inputs.conan-home }}
+        BAAS_EXTRA_CONAN_ARGS: ${{ inputs.extra-conan-args }}
       run: |
-        extra_args=()
-        if [[ -n "${BAAS_EXTRA_CONAN_ARGS}" ]]; then
-          eval "extra_args=(${BAAS_EXTRA_CONAN_ARGS})"
+        conan profile detect --force
+
+        conan_args=(
+          deploy/conan
+          -of "build/conan/${{ inputs.conan-output }}"
+          -pr:h="deploy/conan/profiles/${{ inputs.host-profile }}"
+          -pr:h=deploy/conan/profiles/dependency-versions-default
+          -c:a=tools.files.download:retry=5
+          -c:a=tools.files.download:retry_wait=10
+          -cc core.download:retry=5
+          -cc core.download:retry_wait=10
+        )
+
+        if [[ -n "$BAAS_EXTRA_CONAN_ARGS" ]]; then
+          while IFS= read -r arg; do
+            [[ -n "$arg" ]] && conan_args+=("$arg")
+          done <<< "$BAAS_EXTRA_CONAN_ARGS"
         fi
 
-        conan install deploy/conan \
-          -of "build/conan/${{ inputs.conan-output }}" \
-          -pr:h "deploy/conan/profiles/${{ inputs.host-profile }}" \
-          -pr:h deploy/conan/profiles/dependency-versions-default \
-          "${extra_args[@]}" \
-          --build=missing \
-          --no-remote
+        conan install "${conan_args[@]}" --build=missing --no-remote
+
+    - name: Detect Conan cache changes
+      id: detect-cache
+      if: steps.conan-install.outcome == 'success'
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
       env:
-        BAAS_EXTRA_CONAN_ARGS: ${{ inputs.extra-conan-args }}
+        CONAN_HOME: ${{ inputs.conan-home }}
+      run: |
+        conan list "*:*" -f json --out-file "$RUNNER_TEMP/conan-packages-after.json"
+        if cmp -s "$RUNNER_TEMP/conan-packages-before.json" "$RUNNER_TEMP/conan-packages-after.json"; then
+          changed=false
+        else
+          changed=true
+        fi
+        echo "needs-save=$changed" >> "$GITHUB_OUTPUT"
+        echo "Conan package cache changed: $changed"
+
+    - name: Skip Conan cache update
+      if: steps.conan-install.outcome == 'success' && steps.detect-cache.outputs.needs-save != 'true'
+      shell: bash
+      env:
+        CONAN_CACHE_KEY: ${{ inputs.conan-cache-key }}
+      run: echo "Conan package cache did not change; keeping existing cache key $CONAN_CACHE_KEY."
+
+    - name: Clean Conan cache before save
+      if: steps.conan-install.outcome == 'success' && steps.detect-cache.outputs.needs-save == 'true' && inputs.save-cache == 'true'
+      shell: bash
+      env:
+        CONAN_HOME: ${{ inputs.conan-home }}
+      run: conan cache clean "*" -s -b -d -t -bs
+
+    - name: List Conan package sizes before save
+      if: steps.conan-install.outcome == 'success' && steps.detect-cache.outputs.needs-save == 'true' && inputs.save-cache == 'true'
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      env:
+        CONAN_HOME: ${{ inputs.conan-home }}
+      run: |
+        refs="$(conan list "*:*" -f compact | sed -E 's/^[[:space:]]+//' | grep -E '^[^[:space:]]+/[^[:space:]]+#[^[:space:]]+:[^[:space:]]+$' | sort -u || true)"
+        [[ -n "$refs" ]] || { echo "No Conan binary packages found before cache save."; exit 0; }
+
+        printf '%-12s %s\n' "SIZE" "PACKAGE"
+        while IFS= read -r ref; do
+          path="$(conan cache path "$ref" 2>/dev/null || true)"
+          [[ -n "$path" && -e "$path" ]] && size="$(du -sh "$path" 2>/dev/null | awk '{print $1}')" || size="unknown"
+          printf '%-12s %s\n' "${size:-unknown}" "$ref"
+        done <<< "$refs"
+
+    - name: Delete old Conan cache
+      if: steps.conan-install.outcome == 'success' && steps.detect-cache.outputs.needs-save == 'true' && inputs.save-cache == 'true'
+      shell: bash
+      env:
+        CONAN_CACHE_KEY: ${{ inputs.conan-cache-key }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        repo="${{ github.repository }}"
+        key="$CONAN_CACHE_KEY"
+        echo "Replacing Conan cache key: $key"
+        gh cache delete "$key" --repo "$repo" --succeed-on-no-caches
+
+        for attempt in {1..12}; do
+          remaining="$(gh cache list --repo "$repo" --key "$key" --json key --jq '.[] | select(.key == "'"$key"'") | .key')"
+          [[ -z "$remaining" ]] && { echo "Conan cache key is clear: $key"; exit 0; }
+          echo "Waiting for Conan cache deletion to propagate for $key..."
+          sleep 5
+        done
+
+        echo "Timed out waiting for Conan cache deletion: $key" >&2
+        exit 1
+
+    - name: Save Conan cache
+      if: steps.conan-install.outcome == 'success' && steps.detect-cache.outputs.needs-save == 'true' && inputs.save-cache == 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ inputs.conan-home }}
+        key: ${{ inputs.conan-cache-key }}
+
+    - name: List Conan cache
+      if: steps.conan-install.outcome == 'success' && inputs.save-cache == 'true'
+      shell: bash
+      env:
+        CONAN_CACHE_KEY: ${{ inputs.conan-cache-key }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh cache list --repo "${{ github.repository }}" --key "$CONAN_CACHE_KEY" --sort created_at --order desc --limit 100
 
     - name: Configure CMake
       shell: bash
       working-directory: ${{ inputs.source-dir }}
+      env:
+        CONAN_HOME: ${{ inputs.conan-home }}
       run: cmake --preset "${{ inputs.preset }}"
 
     - name: Build
       if: ${{ inputs.build == 'true' }}
       shell: bash
       working-directory: ${{ inputs.source-dir }}
+      env:
+        CONAN_HOME: ${{ inputs.conan-home }}
       run: cmake --build --preset "${{ inputs.preset }}"
 
     - name: Test
