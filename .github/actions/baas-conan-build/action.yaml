@@ -172,10 +172,12 @@ runs:
         repo="${{ github.repository }}"
         key="$CONAN_CACHE_KEY"
         echo "Replacing Conan cache key: $key"
-        gh cache delete "$key" --repo "$repo" --succeed-on-no-caches
+
+        ids="$(gh cache list --repo "$repo" --key "$key" --limit 100 --json id,key --jq '.[] | select(.key == "'"$key"'") | .id')"
+        [[ -n "$ids" ]] && while IFS= read -r id; do gh cache delete "$id" --repo "$repo"; done <<< "$ids" || echo "No existing Conan cache found for $key."
 
         for attempt in {1..12}; do
-          remaining="$(gh cache list --repo "$repo" --key "$key" --json key --jq '.[] | select(.key == "'"$key"'") | .key')"
+          remaining="$(gh cache list --repo "$repo" --key "$key" --limit 100 --json key --jq '.[] | select(.key == "'"$key"'") | .key')"
           [[ -z "$remaining" ]] && { echo "Conan cache key is clear: $key"; exit 0; }
           echo "Waiting for Conan cache deletion to propagate for $key..."
           sleep 5
