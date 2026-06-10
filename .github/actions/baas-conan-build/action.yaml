@@ -1,0 +1,93 @@
+name: BAAS Conan build
+description: Export BAAS private Conan recipes, install dependencies, configure, build, and optionally test.
+
+inputs:
+  source-dir:
+    description: Directory containing the BAAS_Cpp checkout.
+    required: false
+    default: baas_cpp
+  conan-output:
+    description: Conan output directory under build/conan.
+    required: true
+  host-profile:
+    description: Host profile filename under deploy/conan/profiles.
+    required: true
+  preset:
+    description: CMake configure and build preset name.
+    required: true
+  extra-conan-args:
+    description: Additional arguments passed to conan install.
+    required: false
+    default: ""
+  build:
+    description: Whether to run cmake --build after configure.
+    required: false
+    default: "true"
+  test-command:
+    description: Optional command to run after the build from source-dir.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install Conan tooling
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install "conan>=2,<3" PyYAML
+
+    - name: Restore Conan cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.conan2
+        key: >-
+          baas-conan-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-profile }}-${{ inputs.conan-output }}-${{ hashFiles(format('{0}/deploy/conan/conanfile.py', inputs.source-dir), format('{0}/deploy/conan/profiles/**', inputs.source-dir), format('{0}/deploy/conan/recipes/**', inputs.source-dir), format('{0}/CMakePresets.json', inputs.source-dir)) }}
+        restore-keys: |
+          baas-conan-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-profile }}-${{ inputs.conan-output }}-
+          baas-conan-${{ runner.os }}-${{ runner.arch }}-${{ inputs.host-profile }}-
+
+    - name: Detect Conan build profile
+      shell: bash
+      run: conan profile detect --force
+
+    - name: Export private recipes
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      run: python deploy/conan/scripts/manage_recipes.py export
+
+    - name: Install Conan dependencies
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      run: |
+        extra_args=()
+        if [[ -n "${BAAS_EXTRA_CONAN_ARGS}" ]]; then
+          eval "extra_args=(${BAAS_EXTRA_CONAN_ARGS})"
+        fi
+
+        conan install deploy/conan \
+          -of "build/conan/${{ inputs.conan-output }}" \
+          -pr:h "deploy/conan/profiles/${{ inputs.host-profile }}" \
+          -pr:h deploy/conan/profiles/dependency-versions-default \
+          "${extra_args[@]}" \
+          --build=missing \
+          --no-remote
+      env:
+        BAAS_EXTRA_CONAN_ARGS: ${{ inputs.extra-conan-args }}
+
+    - name: Configure CMake
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      run: cmake --preset "${{ inputs.preset }}"
+
+    - name: Build
+      if: ${{ inputs.build == 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      run: cmake --build --preset "${{ inputs.preset }}"
+
+    - name: Test
+      if: ${{ inputs.test-command != '' }}
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      run: ${{ inputs.test-command }}
