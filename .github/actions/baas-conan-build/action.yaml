@@ -108,7 +108,9 @@ runs:
 
         if [[ -n "$BAAS_EXTRA_CONAN_ARGS" ]]; then
           while IFS= read -r arg; do
-            [[ -n "$arg" ]] && conan_args+=("$arg")
+            [[ -n "$arg" ]] || continue
+            eval "arg=\"${arg}\""
+            conan_args+=("$arg")
           done <<< "$BAAS_EXTRA_CONAN_ARGS"
         fi
 
@@ -217,8 +219,21 @@ runs:
         CONAN_HOME: ${{ inputs.conan-home }}
       run: cmake --build --preset "${{ inputs.preset }}"
 
+    - name: Prepare test layout
+      if: ${{ inputs.test-command != '' }}
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      run: |
+        preset_bin="build/${{ inputs.preset }}/bin"
+        if [[ -d "$preset_bin" ]]; then
+          mkdir -p build/bin
+          cp -a "$preset_bin"/. build/bin/
+        fi
+
     - name: Test
       if: ${{ inputs.test-command != '' }}
       shell: bash
       working-directory: ${{ inputs.source-dir }}
+      env:
+        BAAS_OCR_SERVER_DIR: build/bin
       run: ${{ inputs.test-command }}
