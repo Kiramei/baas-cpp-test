@@ -1,0 +1,127 @@
+name: BAAS Conan OCR Android validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      baas_ref:
+        description: BAAS_Cpp ref to validate
+        required: false
+        default: main
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  ocr-android:
+    name: Android OCR ${{ matrix.abi }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            conan_cache_key: Conan2-BAAS_ocr-Android-arm64-v8a
+            conan_output: android-clang-release-ocr-arm64-v8a
+            host_profile: android-clang-arm64-v8a-release
+            preset: conan-android-clang-release-ocr-arm64-v8a
+            artifact_name: ocr-android-arm64-v8a
+          - abi: x86_64
+            conan_cache_key: Conan2-BAAS_ocr-Android-x86_64
+            conan_output: android-clang-release-ocr-x86_64
+            host_profile: android-clang-x86_64-release
+            preset: conan-android-clang-release-ocr-x86_64
+            artifact_name: ocr-android-x86_64
+    steps:
+      - name: Checkout validation harness
+        uses: actions/checkout@v4
+        with:
+          path: harness
+
+      - name: Checkout BAAS_Cpp
+        uses: actions/checkout@v4
+        with:
+          repository: pur1fying/BAAS_Cpp
+          ref: ${{ inputs.baas_ref }}
+          fetch-depth: 1
+          path: baas_cpp
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Ninja on Windows
+        shell: pwsh
+        run: choco install ninja
+
+      - name: Set up MSVC
+        uses: TheMrMilchmann/setup-msvc-dev@v3
+        with:
+          arch: x64
+
+      - name: Check Android NDK
+        shell: bash
+        run: |
+          test -n "$ANDROID_NDK_LATEST_HOME"
+          test -d "$ANDROID_NDK_LATEST_HOME"
+          echo "ANDROID_NDK_LATEST_HOME=$ANDROID_NDK_LATEST_HOME"
+
+      - name: Build with Conan
+        uses: ./harness/.github/actions/baas-conan-build
+        with:
+          source-dir: baas_cpp
+          conan-output: ${{ matrix.conan_output }}
+          host-profile: ${{ matrix.host_profile }}
+          preset: ${{ matrix.preset }}
+          extra-conan-args: |
+            -c:h
+            tools.android:ndk_path=${ANDROID_NDK_LATEST_HOME}
+            -o
+            &:onnxruntime_use_cuda=False
+            -o
+            &:use_ffmpeg=False
+            -o
+            &:use_benchmark=False
+          conan-cache-key: ${{ matrix.conan_cache_key }}
+          conan-home: ${{ github.workspace }}/.conan2
+          save-cache: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/baas-cpp-validation-harness' }}
+
+      - name: Upload build output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: baas_cpp/build/${{ matrix.preset }}/bin
+          if-no-files-found: ignore
+
+      - name: Dry run release asset name
+        shell: bash
+        working-directory: baas_cpp
+        env:
+          RELEASE_PRODUCT: BAAS_ocr
+          RELEASE_PLATFORM: android
+          RELEASE_ARCH: ${{ matrix.abi }}
+          RELEASE_VARIANT: ""
+          PRESET: ${{ matrix.preset }}
+        run: |
+          if [[ "$RELEASE_PRODUCT" == "BAAS" ]]; then
+            version_file="build/${PRESET}/BAAS_APP_version.txt"
+          else
+            version_file="build/${PRESET}/BAAS_OCR_version.txt"
+          fi
+
+          version="$(tr -d '\r\n' < "${version_file}")"
+          variant_suffix=""
+          if [[ -n "$RELEASE_VARIANT" ]]; then
+            variant_suffix="_${RELEASE_VARIANT}"
+          fi
+          asset_name="${RELEASE_PRODUCT}_v${version}_${RELEASE_PLATFORM}_${RELEASE_ARCH}${variant_suffix}.zip"
+          echo "Release asset dry run: ${asset_name}"
+          echo "Release asset dry run: `${asset_name}`" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,124 @@
+name: BAAS Conan BAAS Windows validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      baas_ref:
+        description: BAAS_Cpp ref to validate
+        required: false
+        default: main
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  baas-windows:
+    name: Windows BAAS App CUDA ${{ matrix.cuda }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cuda: "OFF"
+            onnxruntime_use_cuda: "False"
+            conan_cache_key: Conan2-BAAS-CUDA_off-Windows-x64
+            conan_output: windows-msvc-release-baas
+            preset: conan-windows-msvc-release-baas
+            artifact_name: baas-windows-cuda-OFF
+            release_variant: ""
+          - cuda: "ON"
+            onnxruntime_use_cuda: "True"
+            conan_cache_key: Conan2-BAAS-CUDA_on-Windows-x64
+            conan_output: windows-msvc-release-baas-cuda
+            preset: conan-windows-msvc-release-baas-cuda
+            artifact_name: baas-windows-cuda-ON
+            release_variant: cuda
+    steps:
+      - name: Checkout validation harness
+        uses: actions/checkout@v4
+        with:
+          path: harness
+
+      - name: Checkout BAAS_Cpp
+        uses: actions/checkout@v4
+        with:
+          repository: pur1fying/BAAS_Cpp
+          ref: ${{ inputs.baas_ref }}
+          fetch-depth: 1
+          path: baas_cpp
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Ninja on Windows
+        shell: pwsh
+        run: choco install ninja
+
+      - name: Set up MSVC
+        uses: TheMrMilchmann/setup-msvc-dev@v3
+        with:
+          arch: x64
+
+      - name: Set up CUDA Toolkit
+        if: ${{ matrix.cuda == 'ON' }}
+        uses: Jimver/cuda-toolkit@v0.2.35
+        with:
+          cuda: "12.2.2"
+          method: network
+          log-file-suffix: "baas-windows-cuda-${{ matrix.release_variant }}.txt"
+
+      - name: Build with Conan
+        uses: ./harness/.github/actions/baas-conan-build
+        with:
+          source-dir: baas_cpp
+          conan-output: ${{ matrix.conan_output }}
+          host-profile: windows-msvc-release
+          preset: ${{ matrix.preset }}
+          extra-conan-args: |
+            -o
+            &:onnxruntime_use_cuda=${{ matrix.onnxruntime_use_cuda }}
+          conan-cache-key: ${{ matrix.conan_cache_key }}
+          conan-home: ${{ github.workspace }}/.conan2
+          save-cache: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/baas-cpp-validation-harness' }}
+
+      - name: Upload build output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: baas_cpp/build/${{ matrix.preset }}/bin
+          if-no-files-found: ignore
+
+      - name: Dry run release asset name
+        shell: bash
+        working-directory: baas_cpp
+        env:
+          RELEASE_PRODUCT: BAAS
+          RELEASE_PLATFORM: windows
+          RELEASE_ARCH: x64
+          RELEASE_VARIANT: ${{ matrix.release_variant }}
+          PRESET: ${{ matrix.preset }}
+        run: |
+          if [[ "$RELEASE_PRODUCT" == "BAAS" ]]; then
+            version_file="build/${PRESET}/BAAS_APP_version.txt"
+          else
+            version_file="build/${PRESET}/BAAS_OCR_version.txt"
+          fi
+
+          version="$(tr -d '\r\n' < "${version_file}")"
+          variant_suffix=""
+          if [[ -n "$RELEASE_VARIANT" ]]; then
+            variant_suffix="_${RELEASE_VARIANT}"
+          fi
+          asset_name="${RELEASE_PRODUCT}_v${version}_${RELEASE_PLATFORM}_${RELEASE_ARCH}${variant_suffix}.zip"
+          echo "Release asset dry run: ${asset_name}"
+          echo "Release asset dry run: `${asset_name}`" >> "$GITHUB_STEP_SUMMARY"
