@@ -59,6 +59,10 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      - name: Check source resource layout
+        shell: bash
+        run: python harness/.github/scripts/baas_resource_checks.py no-vendored --source-root baas_cpp
+
       - name: Install Ninja on Windows
         shell: pwsh
         run: choco install ninja
@@ -89,6 +93,16 @@ jobs:
           conan-cache-key: ${{ matrix.conan_cache_key }}
           conan-home: ${{ github.workspace }}/.conan2
           save-cache: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/baas-cpp-validation-harness' }}
+
+      - name: Check runtime resources
+        shell: bash
+        run: |
+          python harness/.github/scripts/baas_resource_checks.py outputs \
+            --root "baas_cpp/build/${{ matrix.preset }}/bin/resource" \
+            --path bin/scrcpy/scrcpy-server.jar \
+            --path bin/Windows/platform-tools/adb.exe \
+            --path ocr_models/configs.txt \
+            --path yolo_models/data.yaml
 
       - name: Upload build output
         if: always()

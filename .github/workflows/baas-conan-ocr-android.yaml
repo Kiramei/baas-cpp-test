@@ -57,6 +57,10 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      - name: Check source resource layout
+        shell: bash
+        run: python harness/.github/scripts/baas_resource_checks.py no-vendored --source-root baas_cpp
+
       - name: Install Ninja on Windows
         shell: pwsh
         run: choco install ninja
@@ -92,6 +96,21 @@ jobs:
           conan-cache-key: ${{ matrix.conan_cache_key }}
           conan-home: ${{ github.workspace }}/.conan2
           save-cache: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/baas-cpp-validation-harness' }}
+
+      - name: Check fetched resources
+        shell: bash
+        run: |
+          python harness/.github/scripts/baas_resource_checks.py outputs \
+            --root "baas_cpp/build/${{ matrix.preset }}/baas-resources/resource" \
+            --path ocr_models/configs.txt
+
+          if [[ -d "baas_cpp/build/${{ matrix.preset }}/bin/resource" ]]; then
+            python harness/.github/scripts/baas_resource_checks.py outputs \
+              --root "baas_cpp/build/${{ matrix.preset }}/bin/resource" \
+              --path ocr_models/configs.txt
+          else
+            echo "Android runtime resource directory was not produced; fetched resource cache was verified."
+          fi
 
       - name: Upload build output
         if: always()

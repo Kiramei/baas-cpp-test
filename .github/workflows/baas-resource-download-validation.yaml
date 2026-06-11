@@ -1,0 +1,95 @@
+name: BAAS resource download validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      baas_ref:
+        description: BAAS_Cpp ref to validate
+        required: false
+        default: codex/resource-download-assets
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  resource-smoke:
+    name: Resource smoke on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-22.04
+          - windows-latest
+          - macos-latest
+    steps:
+      - name: Checkout validation harness
+        uses: actions/checkout@v4
+        with:
+          path: harness
+
+      - name: Checkout BAAS_Cpp
+        uses: actions/checkout@v4
+        with:
+          repository: pur1fying/BAAS_Cpp
+          ref: ${{ inputs.baas_ref }}
+          fetch-depth: 1
+          path: baas_cpp
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate resource lock
+        shell: bash
+        working-directory: baas_cpp
+        run: python -m json.tool resources.lock.json > /dev/null
+
+      - name: Check source resource layout
+        shell: bash
+        run: python harness/.github/scripts/baas_resource_checks.py no-vendored --source-root baas_cpp
+
+      - name: Fetch locked resources
+        shell: bash
+        working-directory: baas_cpp
+        run: |
+          python scripts/fetch_resources.py \
+            --lock resources.lock.json \
+            --output-root build/resource-smoke/resource \
+            --download-root build/resource-smoke-downloads
+
+      - name: Fetch locked resources from cache
+        shell: bash
+        working-directory: baas_cpp
+        run: |
+          set -o pipefail
+          python scripts/fetch_resources.py \
+            --lock resources.lock.json \
+            --output-root build/resource-smoke/resource \
+            --download-root build/resource-smoke-downloads 2>&1 | tee build/resource-smoke-cache.log
+          grep -F "[cache]" build/resource-smoke-cache.log
+
+      - name: Check fetched resource outputs
+        shell: bash
+        run: |
+          python harness/.github/scripts/baas_resource_checks.py outputs \
+            --root baas_cpp/build/resource-smoke/resource \
+            --path bin/scrcpy/scrcpy-server.jar \
+            --path bin/Windows/platform-tools/adb.exe \
+            --path bin/MacOS/platform-tools/adb \
+            --path bin/Linux/platform-tools/adb \
+            --path ocr_models/configs.txt \
+            --path yolo_models/data.yaml
+
+      - name: Write resource manifest
+        shell: bash
+        run: |
+          python harness/.github/scripts/baas_resource_checks.py manifest \
+            --root baas_cpp/build/resource-smoke/resource \
+            --summary "$GITHUB_STEP_SUMMARY"

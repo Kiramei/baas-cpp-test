@@ -41,6 +41,10 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      - name: Check source resource layout
+        shell: bash
+        run: python harness/.github/scripts/baas_resource_checks.py no-vendored --source-root baas_cpp
+
       - name: Prepare macOS tools
         shell: bash
         run: brew update
@@ -72,6 +76,13 @@ jobs:
           test-command: >-
             python -m unittest discover -s apps/ocr_server/test -p "*.py" &&
             python -c "import shutil; shutil.rmtree('build/bin/output', ignore_errors=True); shutil.rmtree('build/bin/config', ignore_errors=True)"
+
+      - name: Check runtime resources
+        shell: bash
+        run: |
+          python harness/.github/scripts/baas_resource_checks.py outputs \
+            --root baas_cpp/build/conan-macos-appleclang-release-ocr/bin/resource \
+            --path ocr_models/configs.txt
 
       - name: Upload build output
         if: always()
