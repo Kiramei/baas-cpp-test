@@ -69,7 +69,7 @@ jobs:
         run: choco install ninja
 
       - name: Set up MSVC
-        uses: TheMrMilchmann/setup-msvc-dev@v3
+        uses: TheMrMilchmann/setup-msvc-dev@v4
         with:
           arch: x64
 

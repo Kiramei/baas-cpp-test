@@ -53,7 +53,7 @@ jobs:
         run: choco install ninja
 
       - name: Set up MSVC
-        uses: TheMrMilchmann/setup-msvc-dev@v3
+        uses: TheMrMilchmann/setup-msvc-dev@v4
         with:
           arch: x64
 
@@ -72,13 +72,15 @@ jobs:
           host-profile: windows-msvc-release
           preset: conan-windows-msvc-release-ocr
           extra-conan-args: |
+            -s:a=compiler.version=195
+            -c:a=tools.microsoft.msbuild:vs_version=18
             -o
             &:onnxruntime_use_cuda=False
             -o
             &:use_ffmpeg=False
             -o
             &:use_benchmark=False
-          conan-cache-key: Conan2-BAAS_ocr-Windows-x64
+          conan-cache-key: Conan2-BAAS_ocr-Windows-x64-msvc195
           conan-home: ${{ github.workspace }}/.conan2
           resource-cache-key: BAAS-resources-ocr-windows-x64-${{ hashFiles('baas_cpp/resources.lock.json') }}
           resource-download-root: ${{ github.workspace }}/.baas-resource-downloads

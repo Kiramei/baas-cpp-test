@@ -30,14 +30,14 @@ jobs:
         include:
           - cuda: "OFF"
             onnxruntime_use_cuda: "False"
-            conan_cache_key: Conan2-BAAS-CUDA_off-Windows-x64
+            conan_cache_key: Conan2-BAAS-CUDA_off-Windows-x64-msvc195
             conan_output: windows-msvc-release-baas
             preset: conan-windows-msvc-release-baas
             artifact_name: baas-windows-cuda-OFF
             release_variant: ""
           - cuda: "ON"
             onnxruntime_use_cuda: "True"
-            conan_cache_key: Conan2-BAAS-CUDA_on-Windows-x64
+            conan_cache_key: Conan2-BAAS-CUDA_on-Windows-x64-msvc195
             conan_output: windows-msvc-release-baas-cuda
             preset: conan-windows-msvc-release-baas-cuda
             artifact_name: baas-windows-cuda-ON
@@ -71,7 +71,7 @@ jobs:
         run: choco install ninja
 
       - name: Set up MSVC
-        uses: TheMrMilchmann/setup-msvc-dev@v3
+        uses: TheMrMilchmann/setup-msvc-dev@v4
         with:
           arch: x64
 
@@ -91,6 +91,8 @@ jobs:
           host-profile: windows-msvc-release
           preset: ${{ matrix.preset }}
           extra-conan-args: |
+            -s:a=compiler.version=195
+            -c:a=tools.microsoft.msbuild:vs_version=18
             -o
             &:onnxruntime_use_cuda=${{ matrix.onnxruntime_use_cuda }}
           conan-cache-key: ${{ matrix.conan_cache_key }}
