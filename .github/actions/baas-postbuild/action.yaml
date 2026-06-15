@@ -1,0 +1,183 @@
+name: BAAS postbuild
+description: Detect and save Conan and BAAS resource caches after configure/build/test.
+
+inputs:
+  source-dir:
+    description: Directory containing the BAAS_Cpp checkout.
+    required: false
+    default: baas_cpp
+  conan-cache-key:
+    description: GitHub Actions cache key for the Conan home.
+    required: true
+  conan-home:
+    description: Conan home directory to restore and save.
+    required: false
+    default: ${{ github.workspace }}/.conan2
+  resource-cache-key:
+    description: GitHub Actions cache key for BAAS locked resource downloads.
+    required: false
+    default: ""
+  resource-download-root:
+    description: Directory used as BAAS_RESOURCE_DOWNLOAD_ROOT.
+    required: false
+    default: ${{ github.workspace }}/.baas-resource-downloads
+  save-cache:
+    description: Whether this run is allowed to replace caches when files changed.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Detect Conan cache changes
+      id: detect-cache
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      env:
+        CONAN_HOME: ${{ inputs.conan-home }}
+      run: |
+        conan list "*:*" -f json --out-file "$RUNNER_TEMP/conan-packages-after.json"
+        if cmp -s "$RUNNER_TEMP/conan-packages-before.json" "$RUNNER_TEMP/conan-packages-after.json"; then
+          changed=false
+        else
+          changed=true
+        fi
+        echo "needs-save=$changed" >> "$GITHUB_OUTPUT"
+        echo "Conan package cache changed: $changed"
+
+    - name: Skip Conan cache update
+      if: steps.detect-cache.outputs.needs-save != 'true'
+      shell: bash
+      env:
+        CONAN_CACHE_KEY: ${{ inputs.conan-cache-key }}
+      run: echo "Conan package cache did not change; keeping existing cache key $CONAN_CACHE_KEY."
+
+    - name: Clean Conan cache before save
+      if: steps.detect-cache.outputs.needs-save == 'true' && inputs.save-cache == 'true'
+      shell: bash
+      env:
+        CONAN_HOME: ${{ inputs.conan-home }}
+      run: conan cache clean "*" -s -b -d -t -bs
+
+    - name: List Conan package sizes before save
+      if: steps.detect-cache.outputs.needs-save == 'true' && inputs.save-cache == 'true'
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      env:
+        CONAN_HOME: ${{ inputs.conan-home }}
+      run: |
+        refs="$(conan list "*:*" -f compact | sed -E 's/^[[:space:]]+//' | grep -E '^[^[:space:]]+/[^[:space:]]+#[^[:space:]]+:[^[:space:]]+$' | sort -u || true)"
+        [[ -n "$refs" ]] || { echo "No Conan binary packages found before cache save."; exit 0; }
+
+        printf '%-12s %s\n' "SIZE" "PACKAGE"
+        while IFS= read -r ref; do
+          path="$(conan cache path "$ref" 2>/dev/null || true)"
+          [[ -n "$path" && -e "$path" ]] && size="$(du -sh "$path" 2>/dev/null | awk '{print $1}')" || size="unknown"
+          printf '%-12s %s\n' "${size:-unknown}" "$ref"
+        done <<< "$refs"
+
+    - name: Delete old Conan cache
+      if: steps.detect-cache.outputs.needs-save == 'true' && inputs.save-cache == 'true'
+      shell: bash
+      env:
+        CONAN_CACHE_KEY: ${{ inputs.conan-cache-key }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        repo="${{ github.repository }}"
+        key="$CONAN_CACHE_KEY"
+        echo "Replacing Conan cache key: $key"
+
+        ids="$(gh cache list --repo "$repo" --key "$key" --limit 100 --json id,key --jq '.[] | select(.key == "'"$key"'") | .id')"
+        [[ -n "$ids" ]] && while IFS= read -r id; do gh cache delete "$id" --repo "$repo"; done <<< "$ids" || echo "No existing Conan cache found for $key."
+
+        for attempt in {1..12}; do
+          remaining="$(gh cache list --repo "$repo" --key "$key" --limit 100 --json key --jq '.[] | select(.key == "'"$key"'") | .key')"
+          [[ -z "$remaining" ]] && { echo "Conan cache key is clear: $key"; exit 0; }
+          echo "Waiting for Conan cache deletion to propagate for $key..."
+          sleep 5
+        done
+
+        echo "Timed out waiting for Conan cache deletion: $key" >&2
+        exit 1
+
+    - name: Save Conan cache
+      if: steps.detect-cache.outputs.needs-save == 'true' && inputs.save-cache == 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ inputs.conan-home }}
+        key: ${{ inputs.conan-cache-key }}
+
+    - name: List Conan cache
+      if: inputs.save-cache == 'true'
+      shell: bash
+      env:
+        CONAN_CACHE_KEY: ${{ inputs.conan-cache-key }}
+        GH_TOKEN: ${{ github.token }}
+      run: gh cache list --repo "${{ github.repository }}" --key "$CONAN_CACHE_KEY" --sort created_at --order desc --limit 100
+
+    - name: Detect BAAS resource cache changes
+      id: detect-resource-cache
+      if: ${{ inputs.resource-cache-key != '' }}
+      shell: bash
+      run: |
+        python "${{ github.action_path }}/../../scripts/baas_resource_checks.py" cache-snapshot \
+          --root "${{ inputs.resource-download-root }}" \
+          --out "$RUNNER_TEMP/baas-resources-after.json"
+        if cmp -s "$RUNNER_TEMP/baas-resources-before.json" "$RUNNER_TEMP/baas-resources-after.json"; then
+          changed=false
+        else
+          changed=true
+        fi
+        echo "needs-save=$changed" >> "$GITHUB_OUTPUT"
+        echo "BAAS resource cache changed: $changed"
+
+    - name: Skip BAAS resource cache update
+      if: inputs.resource-cache-key != '' && steps.detect-resource-cache.outputs.needs-save != 'true'
+      shell: bash
+      env:
+        RESOURCE_CACHE_KEY: ${{ inputs.resource-cache-key }}
+      run: echo "BAAS resource cache did not change; keeping existing cache key $RESOURCE_CACHE_KEY."
+
+    - name: List BAAS resource cache before save
+      if: inputs.resource-cache-key != '' && steps.detect-resource-cache.outputs.needs-save == 'true' && inputs.save-cache == 'true'
+      shell: bash
+      run: python "${{ github.action_path }}/../../scripts/baas_resource_checks.py" cache-list --root "${{ inputs.resource-download-root }}"
+
+    - name: Delete old BAAS resource cache
+      if: inputs.resource-cache-key != '' && steps.detect-resource-cache.outputs.needs-save == 'true' && inputs.save-cache == 'true'
+      shell: bash
+      env:
+        RESOURCE_CACHE_KEY: ${{ inputs.resource-cache-key }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        repo="${{ github.repository }}"
+        key="$RESOURCE_CACHE_KEY"
+        echo "Replacing BAAS resource cache key: $key"
+
+        ids="$(gh cache list --repo "$repo" --key "$key" --limit 100 --json id,key --jq '.[] | select(.key == "'"$key"'") | .id')"
+        [[ -n "$ids" ]] && while IFS= read -r id; do gh cache delete "$id" --repo "$repo"; done <<< "$ids" || echo "No existing BAAS resource cache found for $key."
+
+        for attempt in {1..12}; do
+          remaining="$(gh cache list --repo "$repo" --key "$key" --limit 100 --json key --jq '.[] | select(.key == "'"$key"'") | .key')"
+          [[ -z "$remaining" ]] && { echo "BAAS resource cache key is clear: $key"; exit 0; }
+          echo "Waiting for BAAS resource cache deletion to propagate for $key..."
+          sleep 5
+        done
+
+        echo "Timed out waiting for BAAS resource cache deletion: $key" >&2
+        exit 1
+
+    - name: Save BAAS resource cache
+      if: inputs.resource-cache-key != '' && steps.detect-resource-cache.outputs.needs-save == 'true' && inputs.save-cache == 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ inputs.resource-download-root }}
+        key: ${{ inputs.resource-cache-key }}
+
+    - name: List BAAS resource cache
+      if: inputs.resource-cache-key != '' && inputs.save-cache == 'true'
+      shell: bash
+      env:
+        RESOURCE_CACHE_KEY: ${{ inputs.resource-cache-key }}
+        GH_TOKEN: ${{ github.token }}
+      run: gh cache list --repo "${{ github.repository }}" --key "$RESOURCE_CACHE_KEY" --sort created_at --order desc --limit 100

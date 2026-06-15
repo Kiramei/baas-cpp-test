@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -39,6 +41,13 @@ def parse_args() -> argparse.Namespace:
     manifest = subparsers.add_parser("manifest", help="Append a compact resource manifest.")
     manifest.add_argument("--root", required=True, type=Path)
     manifest.add_argument("--summary", type=Path)
+
+    cache_snapshot = subparsers.add_parser("cache-snapshot", help="Write a deterministic cache manifest.")
+    cache_snapshot.add_argument("--root", required=True, type=Path)
+    cache_snapshot.add_argument("--out", required=True, type=Path)
+
+    cache_list = subparsers.add_parser("cache-list", help="Print resource cache file sizes.")
+    cache_list.add_argument("--root", required=True, type=Path)
 
     return parser.parse_args()
 
@@ -88,6 +97,64 @@ def dir_count(root: Path, relative: str) -> str:
     return str(count)
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def cache_entries(root: Path) -> list[dict[str, object]]:
+    if not root.exists():
+        return []
+
+    entries: list[dict[str, object]] = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root).as_posix()
+        entries.append(
+            {
+                "path": relative,
+                "size": path.stat().st_size,
+                "sha256": sha256_file(path),
+            }
+        )
+    return entries
+
+
+def write_cache_snapshot(root: Path, out: Path) -> int:
+    entries = cache_entries(root)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", encoding="utf-8", newline="\n") as handle:
+        json.dump(entries, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    print(f"Wrote resource cache snapshot: {out} ({len(entries)} files)")
+    return 0
+
+
+def format_size(size: int) -> str:
+    units = ["B", "KiB", "MiB", "GiB"]
+    value = float(size)
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            return f"{value:.1f} {unit}" if unit != "B" else f"{size} B"
+        value /= 1024
+    return f"{size} B"
+
+
+def print_cache_list(root: Path) -> int:
+    entries = cache_entries(root)
+    total = sum(int(entry["size"]) for entry in entries)
+    print(f"Resource cache root: {root}")
+    print(f"Resource cache files: {len(entries)}")
+    print(f"Resource cache size: {format_size(total)}")
+    for entry in entries:
+        print(f"{format_size(int(entry['size'])):>12}  {entry['path']}")
+    return 0
+
+
 def append_manifest(root: Path, summary: Path | None) -> int:
     lines = [
         "### BAAS resource manifest",
@@ -132,6 +199,10 @@ def main() -> int:
         return check_outputs(args.root, args.path)
     if args.command == "manifest":
         return append_manifest(args.root, args.summary)
+    if args.command == "cache-snapshot":
+        return write_cache_snapshot(args.root, args.out)
+    if args.command == "cache-list":
+        return print_cache_list(args.root)
     raise AssertionError(args.command)
 
 

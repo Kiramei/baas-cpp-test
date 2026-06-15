@@ -1,0 +1,126 @@
+name: BAAS prebuild
+description: Install Conan tooling, restore caches, export recipes, install dependencies, and snapshot cache state.
+
+inputs:
+  source-dir:
+    description: Directory containing the BAAS_Cpp checkout.
+    required: false
+    default: baas_cpp
+  conan-output:
+    description: Conan output directory under build/conan.
+    required: true
+  host-profile:
+    description: Host profile filename under deploy/conan/profiles.
+    required: true
+  extra-conan-args:
+    description: Additional arguments passed to conan install, one argument per line.
+    required: false
+    default: ""
+  conan-cache-key:
+    description: GitHub Actions cache key for the Conan home.
+    required: true
+  conan-home:
+    description: Conan home directory to restore and save.
+    required: false
+    default: ${{ github.workspace }}/.conan2
+  resource-cache-key:
+    description: GitHub Actions cache key for BAAS locked resource downloads.
+    required: false
+    default: ""
+  resource-download-root:
+    description: Directory used as BAAS_RESOURCE_DOWNLOAD_ROOT.
+    required: false
+    default: ${{ github.workspace }}/.baas-resource-downloads
+
+runs:
+  using: composite
+  steps:
+    - name: Install Conan tooling
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install "conan>=2,<3" PyYAML
+
+    - name: Restore Conan cache
+      id: restore-cache
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ inputs.conan-home }}
+        key: ${{ inputs.conan-cache-key }}
+
+    - name: Restore BAAS resource cache
+      if: ${{ inputs.resource-cache-key != '' }}
+      id: restore-resource-cache
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ inputs.resource-download-root }}
+        key: ${{ inputs.resource-cache-key }}
+
+    - name: List restored Conan package sizes
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      env:
+        CONAN_HOME: ${{ inputs.conan-home }}
+      run: |
+        refs="$(conan list "*:*" -f compact | sed -E 's/^[[:space:]]+//' | grep -E '^[^[:space:]]+/[^[:space:]]+#[^[:space:]]+:[^[:space:]]+$' | sort -u || true)"
+        [[ -n "$refs" ]] || { echo "No Conan binary packages found in restored cache."; exit 0; }
+
+        printf '%-12s %s\n' "SIZE" "PACKAGE"
+        while IFS= read -r ref; do
+          path="$(conan cache path "$ref" 2>/dev/null || true)"
+          [[ -n "$path" && -e "$path" ]] && size="$(du -sh "$path" 2>/dev/null | awk '{print $1}')" || size="unknown"
+          printf '%-12s %s\n' "${size:-unknown}" "$ref"
+        done <<< "$refs"
+
+    - name: Export private recipes
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      env:
+        CONAN_HOME: ${{ inputs.conan-home }}
+      run: python deploy/conan/scripts/manage_recipes.py export
+
+    - name: Snapshot Conan cache before install
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      env:
+        CONAN_HOME: ${{ inputs.conan-home }}
+      run: conan list "*:*" -f json --out-file "$RUNNER_TEMP/conan-packages-before.json"
+
+    - name: Install Conan dependencies
+      id: conan-install
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      env:
+        CONAN_HOME: ${{ inputs.conan-home }}
+        BAAS_EXTRA_CONAN_ARGS: ${{ inputs.extra-conan-args }}
+      run: |
+        conan profile detect --force
+
+        conan_args=(
+          deploy/conan
+          -of "build/conan/${{ inputs.conan-output }}"
+          -pr:h="deploy/conan/profiles/${{ inputs.host-profile }}"
+          -pr:h=deploy/conan/profiles/dependency-versions-default
+          -c:a=tools.files.download:retry=5
+          -c:a=tools.files.download:retry_wait=10
+          -cc core.download:retry=5
+          -cc core.download:retry_wait=10
+        )
+
+        if [[ -n "$BAAS_EXTRA_CONAN_ARGS" ]]; then
+          while IFS= read -r arg; do
+            [[ -n "$arg" ]] || continue
+            eval "arg=\"${arg}\""
+            conan_args+=("$arg")
+          done <<< "$BAAS_EXTRA_CONAN_ARGS"
+        fi
+
+        conan install "${conan_args[@]}" --build=missing --no-remote
+
+    - name: Snapshot BAAS resource cache before configure
+      if: ${{ inputs.resource-cache-key != '' }}
+      shell: bash
+      run: |
+        python "${{ github.action_path }}/../../scripts/baas_resource_checks.py" cache-snapshot \
+          --root "${{ inputs.resource-download-root }}" \
+          --out "$RUNNER_TEMP/baas-resources-before.json"

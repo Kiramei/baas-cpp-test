@@ -15,6 +15,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   resource-smoke:
@@ -55,6 +56,20 @@ jobs:
         shell: bash
         run: python harness/.github/scripts/baas_resource_checks.py no-vendored --source-root baas_cpp
 
+      - name: Restore BAAS resource cache
+        id: restore-resource-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ github.workspace }}/.baas-resource-downloads
+          key: BAAS-resources-smoke-${{ runner.os }}-${{ hashFiles('baas_cpp/resources.lock.json') }}
+
+      - name: Snapshot BAAS resource cache before fetch
+        shell: bash
+        run: |
+          python harness/.github/scripts/baas_resource_checks.py cache-snapshot \
+            --root "${{ github.workspace }}/.baas-resource-downloads" \
+            --out "$RUNNER_TEMP/baas-resources-before.json"
+
       - name: Fetch locked resources
         shell: bash
         working-directory: baas_cpp
@@ -62,7 +77,70 @@ jobs:
           python scripts/fetch_resources.py \
             --lock resources.lock.json \
             --output-root build/resource-smoke/resource \
-            --download-root build/resource-smoke-downloads
+            --download-root "${{ github.workspace }}/.baas-resource-downloads"
+
+      - name: Detect BAAS resource cache changes
+        id: detect-resource-cache
+        shell: bash
+        run: |
+          python harness/.github/scripts/baas_resource_checks.py cache-snapshot \
+            --root "${{ github.workspace }}/.baas-resource-downloads" \
+            --out "$RUNNER_TEMP/baas-resources-after.json"
+          if cmp -s "$RUNNER_TEMP/baas-resources-before.json" "$RUNNER_TEMP/baas-resources-after.json"; then
+            changed=false
+          else
+            changed=true
+          fi
+          echo "needs-save=$changed" >> "$GITHUB_OUTPUT"
+          echo "BAAS resource cache changed: $changed"
+
+      - name: Skip BAAS resource cache update
+        if: steps.detect-resource-cache.outputs.needs-save != 'true'
+        shell: bash
+        run: echo "BAAS resource cache did not change."
+
+      - name: List BAAS resource cache before save
+        if: steps.detect-resource-cache.outputs.needs-save == 'true'
+        shell: bash
+        run: python harness/.github/scripts/baas_resource_checks.py cache-list --root "${{ github.workspace }}/.baas-resource-downloads"
+
+      - name: Delete old BAAS resource cache
+        if: steps.detect-resource-cache.outputs.needs-save == 'true'
+        shell: bash
+        env:
+          RESOURCE_CACHE_KEY: BAAS-resources-smoke-${{ runner.os }}-${{ hashFiles('baas_cpp/resources.lock.json') }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          repo="${{ github.repository }}"
+          key="$RESOURCE_CACHE_KEY"
+          echo "Replacing BAAS resource cache key: $key"
+
+          ids="$(gh cache list --repo "$repo" --key "$key" --limit 100 --json id,key --jq '.[] | select(.key == "'"$key"'") | .id')"
+          [[ -n "$ids" ]] && while IFS= read -r id; do gh cache delete "$id" --repo "$repo"; done <<< "$ids" || echo "No existing BAAS resource cache found for $key."
+
+          for attempt in {1..12}; do
+            remaining="$(gh cache list --repo "$repo" --key "$key" --limit 100 --json key --jq '.[] | select(.key == "'"$key"'") | .key')"
+            [[ -z "$remaining" ]] && { echo "BAAS resource cache key is clear: $key"; exit 0; }
+            echo "Waiting for BAAS resource cache deletion to propagate for $key..."
+            sleep 5
+          done
+
+          echo "Timed out waiting for BAAS resource cache deletion: $key" >&2
+          exit 1
+
+      - name: Save BAAS resource cache
+        if: steps.detect-resource-cache.outputs.needs-save == 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ github.workspace }}/.baas-resource-downloads
+          key: BAAS-resources-smoke-${{ runner.os }}-${{ hashFiles('baas_cpp/resources.lock.json') }}
+
+      - name: List BAAS resource cache
+        shell: bash
+        env:
+          RESOURCE_CACHE_KEY: BAAS-resources-smoke-${{ runner.os }}-${{ hashFiles('baas_cpp/resources.lock.json') }}
+          GH_TOKEN: ${{ github.token }}
+        run: gh cache list --repo "${{ github.repository }}" --key "$RESOURCE_CACHE_KEY" --sort created_at --order desc --limit 100
 
       - name: Fetch locked resources from cache
         shell: bash
@@ -72,7 +150,7 @@ jobs:
           python scripts/fetch_resources.py \
             --lock resources.lock.json \
             --output-root build/resource-smoke/resource \
-            --download-root build/resource-smoke-downloads 2>&1 | tee build/resource-smoke-cache.log
+            --download-root "${{ github.workspace }}/.baas-resource-downloads" 2>&1 | tee build/resource-smoke-cache.log
           grep -F "[cache]" build/resource-smoke-cache.log
 
       - name: Check fetched resource outputs

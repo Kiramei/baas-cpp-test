@@ -1,0 +1,56 @@
+name: BAAS OCR release validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      baas_ref:
+        description: BAAS_Cpp ref to validate
+        required: false
+        default: codex/resource-download-assets
+        type: string
+      publish_release:
+        description: Print release trigger after all BAAS_ocr builds pass
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  ocr-windows:
+    uses: ./.github/workflows/baas-conan-ocr-windows.yaml
+    with:
+      baas_ref: ${{ inputs.baas_ref }}
+
+  ocr-linux:
+    uses: ./.github/workflows/baas-conan-ocr-linux.yaml
+    with:
+      baas_ref: ${{ inputs.baas_ref }}
+
+  ocr-macos:
+    uses: ./.github/workflows/baas-conan-ocr-macos.yaml
+    with:
+      baas_ref: ${{ inputs.baas_ref }}
+
+  ocr-android:
+    uses: ./.github/workflows/baas-conan-ocr-android.yaml
+    with:
+      baas_ref: ${{ inputs.baas_ref }}
+
+  release-trigger:
+    name: Print BAAS OCR release trigger
+    needs:
+      - ocr-windows
+      - ocr-linux
+      - ocr-macos
+      - ocr-android
+    if: ${{ inputs.publish_release }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Print trigger
+        run: |
+          echo "BAAS_ocr release workflow triggered"
+          echo "baas_ref: ${{ inputs.baas_ref }}"
+          echo "publish_release: ${{ inputs.publish_release }}"

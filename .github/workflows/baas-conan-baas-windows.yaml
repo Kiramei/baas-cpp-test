@@ -6,7 +6,14 @@ on:
       baas_ref:
         description: BAAS_Cpp ref to validate
         required: false
-        default: main
+        default: codex/resource-download-assets
+        type: string
+  workflow_call:
+    inputs:
+      baas_ref:
+        description: BAAS_Cpp ref to validate
+        required: false
+        default: codex/resource-download-assets
         type: string
 
 concurrency:
@@ -92,6 +99,8 @@ jobs:
             &:onnxruntime_use_cuda=${{ matrix.onnxruntime_use_cuda }}
           conan-cache-key: ${{ matrix.conan_cache_key }}
           conan-home: ${{ github.workspace }}/.conan2
+          resource-cache-key: BAAS-resources-${{ matrix.artifact_name }}-${{ hashFiles('baas_cpp/resources.lock.json') }}
+          resource-download-root: ${{ github.workspace }}/.baas-resource-downloads
           save-cache: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/baas-cpp-validation-harness' }}
 
       - name: Check runtime resources
