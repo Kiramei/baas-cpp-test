@@ -75,14 +75,6 @@ jobs:
         with:
           arch: x64
 
-      - name: Set up CUDA Toolkit
-        if: ${{ matrix.cuda == 'ON' }}
-        uses: Jimver/cuda-toolkit@v0.2.35
-        with:
-          cuda: "12.2.2"
-          method: network
-          log-file-suffix: "baas-windows-cuda-${{ matrix.release_variant }}.txt"
-
       - name: Build with Conan
         uses: ./harness/.github/actions/baas-conan-build
         with:
