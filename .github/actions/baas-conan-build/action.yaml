@@ -94,6 +94,7 @@ runs:
       working-directory: ${{ inputs.source-dir }}
       env:
         BAAS_OCR_SERVER_DIR: build/bin
+        BAAS_RESOURCE_DOWNLOAD_ROOT: ${{ inputs.resource-download-root }}
       run: ${{ inputs.test-command }}
 
     - name: BAAS postbuild
