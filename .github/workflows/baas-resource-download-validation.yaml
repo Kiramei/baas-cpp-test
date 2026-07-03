@@ -6,7 +6,7 @@ on:
       baas_ref:
         description: BAAS_Cpp ref to validate
         required: false
-        default: codex/resource-download-assets
+        default: main
         type: string
 
 permissions:
